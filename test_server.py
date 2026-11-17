@@ -1,0 +1,54 @@
+"""Run: python3 test_server.py"""
+import json
+import threading
+import urllib.error
+import urllib.request
+from http.server import HTTPServer
+
+import server
+
+server.open_db(":memory:")
+httpd = HTTPServer(("127.0.0.1", 0), server.Handler)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{httpd.server_port}"
+
+
+def call(method, path, body=None, headers=None):
+    req = urllib.request.Request(BASE + path, method=method, headers=headers or {},
+                                 data=json.dumps(body).encode() if body is not None else None)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def j(result):
+    return result[0], json.loads(result[1])
+
+
+assert call("GET", "/")[0] == 200
+assert call("GET", "/.key")[0] == 404, "must not serve files other than the page"
+assert call("GET", "/calls.db")[0] == 404
+assert call("GET", "/calls", headers={"Host": "evil.example"})[0] == 403
+assert call("POST", "/calls", {"lang": "en"}, {"Origin": "https://evil.example"})[0] == 403
+assert call("POST", "/token", {"lang": "es"})[0] == 400
+assert call("POST", "/calls", {"lang": "xx"})[0] == 400
+
+status, created = j(call("POST", "/calls", {"lang": "de"}))
+assert status == 201
+cid = created["id"]
+assert call("PUT", f"/calls/{cid}", {"original": "مرحبا", "translation": "Hallo Welt"})[0] == 200
+assert call("PUT", f"/calls/{cid}", {"translation": 5})[0] == 400
+assert call("PUT", "/calls/999", {"translation": "x"})[0] == 404
+
+status, saved = j(call("GET", f"/calls/{cid}"))
+assert (saved["original"], saved["translation"], saved["lang"]) == ("مرحبا", "Hallo Welt", "de")
+assert [c["id"] for c in j(call("GET", "/calls"))[1]] == [cid]
+assert [c["id"] for c in j(call("GET", "/calls?q=Welt"))[1]] == [cid]
+assert j(call("GET", "/calls?q=%D9%85%D8%B1%D8%AD"))[1], "search covers the original text"
+assert j(call("GET", "/calls?q=nothing"))[1] == []
+
+assert call("DELETE", f"/calls/{cid}")[0] == 200
+assert call("GET", f"/calls/{cid}")[0] == 404
+print("ok")

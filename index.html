@@ -1,92 +1,369 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Live Translator</title>
 <style>
-  body { margin: 0; background: #111; color: #eee; font: 16px system-ui; display: flex; flex-direction: column; height: 100vh; }
-  header { padding: 12px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #333; }
-  button, select { font: inherit; padding: 6px 12px; }
-  #status { color: #999; }
-  main { flex: 1; display: flex; min-height: 0; }
-  main div { flex: 1; overflow-y: auto; padding: 24px; font-size: 32px; line-height: 1.4; white-space: pre-wrap; }
-  #src { color: #999; border-right: 1px solid #333; }
+  :root {
+    --bg: #F3F5F8; --surface: #FFFFFF; --ink: #16202E; --muted: #617086;
+    --line: #DCE1E9; --hover: #E9EDF3; --accent: #2348A6; --live: #C8322B;
+    --reader-font: "New York", "Iowan Old Style", Georgia, serif;
+    --reader-size: 30px;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F141B; --surface: #161D27; --ink: #E7ECF3; --muted: #8C99AC;
+      --line: #27313F; --hover: #1E2734; --accent: #8FB0FF; --live: #FF6B5E;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; height: 100vh; display: flex; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Sidebar: saved calls */
+  aside { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  aside h1 { margin: 0; padding: 18px 16px 12px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  #q { margin: 0 12px 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+  #list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .item { display: block; width: 100%; text-align: start; padding: 9px 10px; border: 0; border-radius: 7px;
+          background: none; cursor: pointer; }
+  .item:hover { background: var(--hover); }
+  .item[aria-current="true"] { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+  .item b { display: block; font-weight: 600; }
+  .item small { display: block; color: var(--muted); font-size: 12px; }
+  .item p { margin: 3px 0 0; color: var(--muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #liveItem { width: auto; margin: 0 8px 6px; }
+  .empty { padding: 10px; color: var(--muted); }
+  .settings { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center;
+              padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
+  .settings select, .settings input { width: 100%; min-width: 0; }
+
+  /* Stage: controls and transcript */
+  .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; min-height: 58px; padding: 10px 20px;
+         border-bottom: 1px solid var(--line); }
+  .bar label { display: flex; gap: 6px; align-items: center; }
+  select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+  .btn { padding: 7px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; font-weight: 550; }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.primary:hover { opacity: 0.88; }
+  .btn.danger { color: var(--live); }
+  #status { margin-inline-start: auto; display: flex; gap: 8px; align-items: center; color: var(--muted);
+            font-variant-numeric: tabular-nums; }
+  #status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  #status.live { color: var(--ink); }
+  #status.live::before { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
+  #status.error { color: var(--live); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { #status.live::before { animation: none; } }
+  #viewTitle { font-weight: 600; }
+  #viewMeta { color: var(--muted); margin-inline-end: auto; }
+
+  main { flex: 1; min-height: 0; display: flex; }
+  main section { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  main section + section { border-inline-start: 1px solid var(--line); }
+  main h2 { margin: 0; padding: 14px 32px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+  main.single h2 { display: none; }
+  .text { flex: 1; overflow-y: auto; padding: 20px 32px 40px; white-space: pre-wrap; overflow-wrap: break-word;
+          font-family: var(--reader-font); font-size: var(--reader-size); line-height: 1.45; }
+  #src { color: var(--muted); }
+  .text:empty::before { content: attr(data-empty); color: var(--muted); font: 15px/1.5 system-ui, sans-serif; }
+
+  @media (max-width: 760px) {
+    body { flex-direction: column; }
+    aside { width: auto; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { flex-direction: column; }
+    main section + section { border-inline-start: 0; border-top: 1px solid var(--line); }
+    .text { padding: 16px; }
+    main h2 { padding: 12px 16px 0; }
+  }
 </style>
-<header>
-  <button id="btn">Start</button>
-  <label>To <select id="lang">
-    <option value="en">English</option><option value="ar">Arabic</option><option value="de">German</option>
-  </select></label>
-  <label><input type="checkbox" id="voice"> Play voice (use headphones)</label>
-  <label><input type="checkbox" id="showSrc"> Show original</label>
-  <span id="status">idle</span>
-</header>
-<main>
-  <div id="src" hidden dir="auto"></div>
-  <div id="out" aria-live="polite" dir="auto"></div>
-</main>
+
+<aside>
+  <h1>Live Translator</h1>
+  <input id="q" type="search" placeholder="Search saved calls" aria-label="Search saved calls">
+  <button id="liveItem" class="item" aria-current="true"><b id="liveLabel">New call</b><small id="liveSub">Not started</small></button>
+  <div id="list"></div>
+  <div class="settings">
+    <label for="font">Font</label>
+    <select id="font">
+      <option value='"New York", "Iowan Old Style", Georgia, serif'>Serif</option>
+      <option value="system-ui, sans-serif">Sans</option>
+      <option value='ui-rounded, "SF Pro Rounded", system-ui, sans-serif'>Rounded</option>
+      <option value="ui-monospace, Menlo, monospace">Mono</option>
+    </select>
+    <label for="size">Size</label>
+    <input id="size" type="range" min="16" max="56" step="2" value="30">
+  </div>
+</aside>
+
+<div class="stage">
+  <div class="bar" id="liveBar">
+    <button id="btn" class="btn primary">Start call</button>
+    <label>Translate to
+      <select id="lang">
+        <option value="en">English</option><option value="ar">Arabic</option><option value="de">German</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="showSrc"> Show original</label>
+    <label title="Use headphones, or the microphone will pick up the translated voice"><input type="checkbox" id="voice"> Play voice</label>
+    <span id="status" role="status">Ready</span>
+  </div>
+  <div class="bar" id="viewBar" hidden>
+    <button id="back" class="btn">Back to live</button>
+    <span id="viewTitle"></span>
+    <span id="viewMeta"></span>
+    <button id="del" class="btn danger">Delete call</button>
+  </div>
+  <main id="panes" class="single">
+    <section id="srcPane" hidden>
+      <h2>Original</h2>
+      <div id="src" class="text" dir="auto" data-empty="The original speech appears here."></div>
+    </section>
+    <section>
+      <h2>Translation</h2>
+      <div id="out" class="text" dir="auto" aria-live="polite" data-empty="Start a call and the translation appears here. Calls are saved automatically."></div>
+    </section>
+  </main>
+</div>
 <audio id="audio" autoplay muted></audio>
+
 <script>
 const $ = (id) => document.getElementById(id);
-let pc, mic;
+const LANG = { en: "English", ar: "Arabic", de: "German" };
 
-$("showSrc").onchange = () => { $("src").hidden = !$("showSrc").checked; };
+const live = { src: "", out: "", last: {} }; // text of the current call
+let pc, mic, timer, autosave;
+let callId = null, callLang = null, startedAt = 0, dirty = false, saving = Promise.resolve();
+const SILENCE_LIMIT_MS = 2 * 60 * 1000; // end the call after this long with no speech, so a forgotten session stops billing
+let lastSpeech = 0;
+let view = null; // a saved call being read, or null for the live call
 
-function append(el, delta) {
-  const now = Date.now();
-  // No "sentence done" event, so a 2s pause starts a new line.
-  if (el.last && now - el.last > 2000) el.textContent += "\n";
-  el.last = now;
-  el.textContent += delta;
-  el.scrollTop = el.scrollHeight;
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body && JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error?.message ?? data.error ?? `Request failed (${r.status})`);
+  return data;
 }
 
+function setStatus(text, cls = "") {
+  $("status").textContent = text;
+  $("status").className = cls;
+}
+
+const clock = (sec) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+const when = (iso) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const duration = (c) => clock((new Date(c.ended_at) - new Date(c.started_at)) / 1000);
+
+/* ---------- Transcript panes ---------- */
+
+function render() {
+  const showSrc = view ? !!view.original : $("showSrc").checked;
+  $("srcPane").hidden = !showSrc;
+  $("panes").classList.toggle("single", !showSrc);
+  $("src").textContent = view ? view.original : live.src;
+  $("out").textContent = view ? view.translation : live.out;
+  for (const id of ["src", "out"]) $(id).scrollTop = view ? 0 : $(id).scrollHeight;
+
+  $("liveBar").hidden = !!view;
+  $("viewBar").hidden = !view;
+  if (view) {
+    $("viewTitle").textContent = when(view.started_at);
+    $("viewMeta").textContent = `${duration(view)}, translated to ${LANG[view.lang] ?? view.lang}`;
+    resetDelete();
+  }
+  $("liveItem").setAttribute("aria-current", !view);
+  for (const el of $("list").children) el.setAttribute("aria-current", view?.id === Number(el.dataset.id));
+}
+
+function append(key, delta) {
+  const now = Date.now();
+  // The API sends no "sentence finished" event, so a 2 second pause starts a new line.
+  const text = (live.last[key] && now - live.last[key] > 2000 ? "\n" : "") + delta;
+  live.last[key] = lastSpeech = now;
+  live[key] += text;
+  dirty = true;
+  if (view) return;
+  const el = $(key);
+  const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 120; // don't yank the view if scrolled up
+  el.append(text);
+  if (pinned) el.scrollTop = el.scrollHeight;
+}
+
+/* ---------- Saving ---------- */
+
+function save() {
+  if (!dirty) return saving;
+  dirty = false;
+  saving = saving
+    .then(async () => {
+      if (callId == null) callId = (await api("POST", "/calls", { lang: callLang })).id;
+      await api("PUT", `/calls/${callId}`, { original: live.src, translation: live.out });
+      await loadCalls();
+    })
+    .catch((e) => { dirty = true; setStatus(`Could not save the call: ${e.message}`, "error"); });
+  return saving;
+}
+
+async function loadCalls() {
+  const calls = await api("GET", `/calls?q=${encodeURIComponent($("q").value)}`);
+  const list = $("list");
+  list.replaceChildren(...calls.map((c) => {
+    const item = document.createElement("button");
+    item.className = "item";
+    item.dataset.id = c.id;
+    item.setAttribute("aria-current", view?.id === c.id);
+    const title = document.createElement("b"), meta = document.createElement("small"), preview = document.createElement("p");
+    title.textContent = when(c.started_at);
+    meta.textContent = `${duration(c)}, ${LANG[c.lang] ?? c.lang}`;
+    preview.textContent = c.preview;
+    preview.dir = "auto";
+    item.append(title, meta, preview);
+    item.onclick = async () => { view = await api("GET", `/calls/${c.id}`); render(); };
+    return item;
+  }));
+  if (!calls.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = $("q").value ? "No saved call matches that search." : "Saved calls appear here.";
+    list.append(empty);
+  }
+}
+
+/* ---------- Saved call view ---------- */
+
+let deleteArmed;
+function resetDelete() {
+  clearTimeout(deleteArmed);
+  deleteArmed = null;
+  $("del").textContent = "Delete call";
+}
+$("del").onclick = async () => {
+  if (!deleteArmed) { // second click within 4 seconds confirms
+    $("del").textContent = "Click again to delete";
+    deleteArmed = setTimeout(resetDelete, 4000);
+    return;
+  }
+  await api("DELETE", `/calls/${view.id}`);
+  if (view.id === callId) callId = null;
+  view = null;
+  render();
+  loadCalls();
+};
+$("back").onclick = $("liveItem").onclick = () => { view = null; render(); };
+
+let searchDelay;
+$("q").oninput = () => { clearTimeout(searchDelay); searchDelay = setTimeout(loadCalls, 200); };
+
+/* ---------- Live call ---------- */
+
+$("showSrc").onchange = render;
 $("voice").onchange = () => { $("audio").muted = !$("voice").checked; };
-$("btn").onclick = () => (pc ? stop() : start().catch((e) => { stop(); $("status").textContent = e.message; }));
+$("btn").onclick = () => (pc ? stop() : start().catch((e) => { stop(); setStatus(e.message, "error"); }));
 
 async function start() {
-  $("btn").textContent = "Stop";
-  $("status").textContent = "connecting…";
-  $("showSrc").disabled = true; // transcription is fixed when the session is created
+  $("btn").textContent = "End call";
+  $("btn").classList.remove("primary");
+  $("showSrc").disabled = $("lang").disabled = true; // both are fixed when the session is created
+  setStatus("Connecting…");
+
+  await saving; // let the previous call finish saving before reusing the state
+  Object.assign(live, { src: "", out: "", last: {} });
+  callId = null;
+  callLang = $("lang").value;
+  dirty = false;
+  render();
 
   // Browser audio processing off: it adds delay and mangles speakerphone audio.
   mic = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
 
-  const tokenRes = await fetch($("showSrc").checked ? "/token?src=1" : "/token", { method: "POST", body: $("lang").value });
-  const token = await tokenRes.json();
-  if (!tokenRes.ok) throw new Error(token.error?.message || "token request failed");
-  const secret = token.value ?? token.client_secret?.value; // docs disagree on the shape
+  const token = await api("POST", "/token", { lang: callLang, original: $("showSrc").checked });
 
   pc = new RTCPeerConnection();
   pc.addTrack(mic.getTracks()[0], mic);
   pc.ontrack = ({ streams }) => { $("audio").srcObject = streams[0]; };
-  pc.onconnectionstatechange = () => { if (pc) $("status").textContent = pc.connectionState; };
+  pc.onconnectionstatechange = () => {
+    if (!pc) return;
+    if (pc.connectionState === "connected" && !startedAt) {
+      startedAt = lastSpeech = Date.now();
+      $("liveLabel").textContent = "Live call";
+      timer = setInterval(tick, 1000);
+      tick();
+    } else if (["failed", "disconnected"].includes(pc.connectionState)) {
+      setStatus("Connection lost. End the call and start again.", "error");
+    }
+  };
 
   pc.createDataChannel("oai-events").onmessage = ({ data }) => {
     const ev = JSON.parse(data);
-    if (ev.type === "session.output_transcript.delta") append($("out"), ev.delta);
-    else if (ev.type === "session.input_transcript.delta") append($("src"), ev.delta);
-    else if (ev.type === "error") {
-      $("status").textContent = ev.error?.message || "error";
-    }
+    if (ev.type === "session.output_transcript.delta") append("out", ev.delta);
+    else if (ev.type === "session.input_transcript.delta") append("src", ev.delta);
+    else if (ev.type === "error") setStatus(ev.error?.message || "The translation service reported an error.", "error");
   };
 
   await pc.setLocalDescription(await pc.createOffer());
   const sdp = await fetch("https://api.openai.com/v1/realtime/translations/calls", {
     method: "POST",
-    headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/sdp" },
+    headers: { Authorization: `Bearer ${token.value}`, "Content-Type": "application/sdp" },
     body: pc.localDescription.sdp,
   });
-  if (!sdp.ok) throw new Error(`call failed: ${sdp.status} ${await sdp.text()}`);
+  if (!sdp.ok) throw new Error(`Could not start the call (${sdp.status}): ${await sdp.text()}`);
   await pc.setRemoteDescription({ type: "answer", sdp: await sdp.text() });
+  autosave = setInterval(save, 3000);
+}
+
+function tick() {
+  if (Date.now() - lastSpeech > SILENCE_LIMIT_MS) {
+    stop();
+    return setStatus("Call ended after 2 minutes without speech.");
+  }
+  const t = clock((Date.now() - startedAt) / 1000);
+  setStatus(`Live ${t}`, "live");
+  $("liveSub").textContent = `${t}, translating to ${LANG[callLang]}`;
 }
 
 function stop() {
+  clearInterval(timer);
+  clearInterval(autosave);
   mic?.getTracks().forEach((t) => t.stop());
   pc?.close();
   pc = mic = null;
-  $("showSrc").disabled = false;
-  $("btn").textContent = "Start";
-  $("status").textContent = "idle";
+  startedAt = 0;
+  $("showSrc").disabled = $("lang").disabled = false;
+  $("btn").textContent = "Start call";
+  $("btn").classList.add("primary");
+  $("liveLabel").textContent = "New call";
+  $("liveSub").textContent = live.out || live.src ? "Last call saved" : "Not started";
+  setStatus("Ready");
+  save();
 }
+
+/* ---------- Text settings ---------- */
+
+function applyText() {
+  document.documentElement.style.setProperty("--reader-font", $("font").value);
+  document.documentElement.style.setProperty("--reader-size", `${$("size").value}px`);
+  try { localStorage.setItem("text", JSON.stringify({ font: $("font").value, size: $("size").value })); } catch {}
+}
+try {
+  const saved = JSON.parse(localStorage.getItem("text"));
+  if (saved) { $("font").value = saved.font; $("size").value = saved.size; }
+} catch {}
+if ($("font").selectedIndex < 0) $("font").selectedIndex = 0;
+$("font").onchange = $("size").oninput = applyText;
+applyText();
+
+loadCalls().catch((e) => setStatus(`Could not load saved calls: ${e.message}`, "error"));
 </script>
+</html>
