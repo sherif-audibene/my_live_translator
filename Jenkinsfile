@@ -2,8 +2,9 @@
 // The app listens on 127.0.0.1:$PORT; a Cloudflare Tunnel ingress
 // ($PUBLIC_HOST -> http://localhost:$PORT) provides the public HTTPS address.
 //
-// Needs two "Secret text" credentials in Jenkins:
+// Needs three "Secret text" credentials in Jenkins:
 //   live-translator-openai-key   the OpenAI API key
+//   live-translator-soniox-key   the Soniox API key
 //   live-translator-password     the password asked for when opening the page
 pipeline {
   agent any
@@ -33,6 +34,7 @@ pipeline {
       steps {
         withCredentials([
           string(credentialsId: 'live-translator-openai-key', variable: 'OPENAI_API_KEY'),
+          string(credentialsId: 'live-translator-soniox-key', variable: 'SONIOX_API_KEY'),
           string(credentialsId: 'live-translator-password', variable: 'APP_PASSWORD')
         ]) {
           sh '''

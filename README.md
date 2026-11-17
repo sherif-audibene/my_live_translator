@@ -1,6 +1,11 @@
 # Live Translator
 
-Live subtitles for a phone call (or anything the Mac's microphone hears), translated in real time with OpenAI's `gpt-realtime-translate` over WebRTC.
+Live subtitles for a phone call (or anything the Mac's microphone hears), translated in real time.
+
+Two engines, switchable in the page:
+
+- **OpenAI** `gpt-realtime-translate` over WebRTC: about $2 per hour, text plus optional translated voice.
+- **Soniox** real-time translation over a WebSocket: about $0.15 per hour, text only, original transcript included.
 
 - Target languages: English, Arabic, German (source language is auto-detected)
 - Optional side-by-side original transcript
@@ -10,17 +15,17 @@ Live subtitles for a phone call (or anything the Mac's microphone hears), transl
 
 ## Run
 
-Needs Python 3 and an OpenAI API key. No dependencies.
+Needs Python 3 and an OpenAI API key. No dependencies. Add a Soniox API key to enable the Soniox engine.
 
 ```bash
-OPENAI_API_KEY=sk-... python3 server.py
+OPENAI_API_KEY=sk-... SONIOX_API_KEY=... python3 server.py
 ```
 
 Open http://localhost:8765 in Chrome, click **Start call** and allow the microphone.
 
 Run the checks with `python3 test_server.py`.
 
-The local server only exists to mint short-lived session tokens, so the API key never reaches the browser. It listens on localhost only. Do not expose it to a network: anyone who can reach it can spend your key.
+The local server only exists to mint short-lived session tokens, so the API keys never reach the browser. It listens on localhost only. Do not expose it to a network: anyone who can reach it can spend your key.
 
 ## Capturing a call that runs on the Mac
 
@@ -32,7 +37,7 @@ The `Jenkinsfile` tests the app, copies it to `/opt/live-translator` on the Jenk
 
 One-time setup:
 
-1. In Jenkins, add two **Secret text** credentials: `live-translator-openai-key` (the OpenAI API key) and `live-translator-password` (the password for opening the page).
+1. In Jenkins, add three **Secret text** credentials: `live-translator-openai-key` (the OpenAI API key), `live-translator-soniox-key` (the Soniox API key) and `live-translator-password` (the password for opening the page).
 2. Point an HTTPS hostname at `http://localhost:6304`, for example with a Cloudflare Tunnel ingress. The microphone only works over HTTPS.
 3. Set `PUBLIC_HOST` in the `Jenkinsfile` to that hostname.
 

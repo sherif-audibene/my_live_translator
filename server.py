@@ -4,6 +4,7 @@ Serves the page, mints short-lived OpenAI session tokens (so the API key never
 reaches the browser) and stores call transcripts in a local SQLite file.
 
 Run: OPENAI_API_KEY=sk-... python3 server.py  ->  http://localhost:8765
+Set SONIOX_API_KEY as well to enable the cheaper Soniox engine.
 
 On a server, also set PUBLIC_HOST (the HTTPS hostname in front of it) and
 APP_PASSWORD (required then); PORT is optional.
@@ -48,21 +49,31 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def mint_token(lang, with_original):
-    audio = {"output": {"language": lang}}
-    if with_original:  # also transcribe the original speech
-        audio["input"] = {"transcription": {"model": "gpt-realtime-whisper"}}
+def post_json(url, key, body):
     req = urllib.request.Request(
-        "https://api.openai.com/v1/realtime/translations/client_secrets",
-        data=json.dumps({"session": {"model": "gpt-realtime-translate", "audio": audio}}).encode(),
-        headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-                 "Content-Type": "application/json"},
+        url, data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
+
+
+def mint_openai_token(lang, with_original):
+    audio = {"output": {"language": lang}}
+    if with_original:  # also transcribe the original speech
+        audio["input"] = {"transcription": {"model": "gpt-realtime-whisper"}}
+    return post_json("https://api.openai.com/v1/realtime/translations/client_secrets",
+                     os.environ["OPENAI_API_KEY"],
+                     {"session": {"model": "gpt-realtime-translate", "audio": audio}})
+
+
+def mint_soniox_token():
+    # Short-lived and single-use: it only has to survive until the browser opens its connection.
+    return post_json("https://api.soniox.com/v1/auth/temporary-api-key", os.environ["SONIOX_API_KEY"],
+                     {"usage_type": "transcribe_websocket", "expires_in_seconds": 60, "single_use": True})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -128,7 +139,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.json_body()
                 if data.get("lang") not in LANGS:
                     return self.reply(400, {"error": "unsupported language"})
-                return self.reply(*mint_token(data["lang"], bool(data.get("original"))))
+                if data.get("engine") == "soniox":
+                    if not os.environ.get("SONIOX_API_KEY"):
+                        return self.reply(400, {"error": "Soniox is not set up on this server (SONIOX_API_KEY is missing)"})
+                    return self.reply(*mint_soniox_token())
+                return self.reply(*mint_openai_token(data["lang"], bool(data.get("original"))))
 
             if method == "GET" and path == "/calls":
                 q = f"%{parse_qs(query).get('q', [''])[0]}%"

@@ -1,6 +1,7 @@
 """Run: python3 test_server.py"""
 import base64
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -35,6 +36,8 @@ assert call("GET", "/calls.db")[0] == 404
 assert call("GET", "/calls", headers={"Host": "evil.example"})[0] == 403
 assert call("POST", "/calls", {"lang": "en"}, {"Origin": "https://evil.example"})[0] == 403
 assert call("POST", "/token", {"lang": "es"})[0] == 400
+os.environ.pop("SONIOX_API_KEY", None)
+assert call("POST", "/token", {"lang": "en", "engine": "soniox"})[0] == 400, "Soniox needs its own key"
 assert call("POST", "/calls", {"lang": "xx"})[0] == 400
 
 status, created = j(call("POST", "/calls", {"lang": "de"}))

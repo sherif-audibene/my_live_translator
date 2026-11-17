@@ -72,6 +72,7 @@
   .text { flex: 1; overflow-y: auto; padding: 20px 32px 40px; white-space: pre-wrap; overflow-wrap: break-word;
           font-family: var(--reader-font); font-size: var(--reader-size); line-height: 1.45; }
   #src { color: var(--muted); }
+  .pending { opacity: 0.55; } /* words the engine may still revise */
   .text:empty::before { content: attr(data-empty); color: var(--muted); font: 15px/1.5 system-ui, sans-serif; }
 
   @media (max-width: 760px) {
@@ -110,6 +111,12 @@
         <option value="en">English</option><option value="ar">Arabic</option><option value="de">German</option>
       </select>
     </label>
+    <label>Engine
+      <select id="engine">
+        <option value="openai">OpenAI, about $2 per hour</option>
+        <option value="soniox">Soniox, about $0.15 per hour, text only</option>
+      </select>
+    </label>
     <label><input type="checkbox" id="showSrc"> Show original</label>
     <label title="Use headphones, or the microphone will pick up the translated voice"><input type="checkbox" id="voice"> Play voice</label>
     <span id="status" role="status">Ready</span>
@@ -138,7 +145,7 @@ const $ = (id) => document.getElementById(id);
 const LANG = { en: "English", ar: "Arabic", de: "German" };
 
 const live = { src: "", out: "", last: {} }; // text of the current call
-let pc, mic, timer, autosave;
+let pc, ws, recorder, mic, timer, autosave, running = false;
 let callId = null, callLang = null, startedAt = 0, dirty = false, saving = Promise.resolve();
 const SILENCE_LIMIT_MS = 2 * 60 * 1000; // end the call after this long with no speech, so a forgotten session stops billing
 let lastSpeech = 0;
@@ -172,7 +179,10 @@ function render() {
   $("panes").classList.toggle("single", !showSrc);
   $("src").textContent = view ? view.original : live.src;
   $("out").textContent = view ? view.translation : live.out;
-  for (const id of ["src", "out"]) $(id).scrollTop = view ? 0 : $(id).scrollHeight;
+  for (const id of ["src", "out"]) {
+    if (!view && pending[id].textContent) $(id).append(pending[id]);
+    $(id).scrollTop = view ? 0 : $(id).scrollHeight;
+  }
 
   $("liveBar").hidden = !!view;
   $("viewBar").hidden = !view;
@@ -195,7 +205,21 @@ function append(key, delta) {
   if (view) return;
   const el = $(key);
   const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 120; // don't yank the view if scrolled up
-  el.append(text);
+  if (pending[key].isConnected) pending[key].before(text); else el.append(text);
+  if (pinned) el.scrollTop = el.scrollHeight;
+}
+
+// Provisional words shown after the confirmed text; replaced on every update and never saved.
+const pending = { src: document.createElement("span"), out: document.createElement("span") };
+pending.src.className = pending.out.className = "pending";
+function setPending(key, text) {
+  pending[key].textContent = text;
+  if (text) lastSpeech = Date.now();
+  if (view) return;
+  const el = $(key);
+  const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  if (!text) pending[key].remove(); // keeps the empty-pane hint working
+  else if (!pending[key].isConnected) el.append(pending[key]);
   if (pinned) el.scrollTop = el.scrollHeight;
 }
 
@@ -268,12 +292,25 @@ $("q").oninput = () => { clearTimeout(searchDelay); searchDelay = setTimeout(loa
 
 $("showSrc").onchange = render;
 $("voice").onchange = () => { $("audio").muted = !$("voice").checked; };
-$("btn").onclick = () => (pc ? stop() : start().catch((e) => { stop(); setStatus(e.message, "error"); }));
+$("btn").onclick = () => (running ? stop() : start().catch((e) => { stop(); setStatus(e.message, "error"); }));
+
+function applyEngine() {
+  const soniox = $("engine").value === "soniox";
+  $("voice").disabled = soniox; // Soniox returns text only
+  try { localStorage.setItem("engine", $("engine").value); } catch {}
+}
+try { $("engine").value = localStorage.getItem("engine") || "openai"; } catch {}
+if ($("engine").selectedIndex < 0) $("engine").selectedIndex = 0;
+$("engine").onchange = applyEngine;
+applyEngine();
 
 async function start() {
+  running = true;
+  const engine = $("engine").value;
   $("btn").textContent = "End call";
   $("btn").classList.remove("primary");
-  $("showSrc").disabled = $("lang").disabled = true; // both are fixed when the session is created
+  $("lang").disabled = $("engine").disabled = true; // fixed when the session is created
+  $("showSrc").disabled = engine === "openai";      // OpenAI only transcribes the original if asked up front
   setStatus("Connecting…");
 
   await saving; // let the previous call finish saving before reusing the state
@@ -288,6 +325,54 @@ async function start() {
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
 
+  await (engine === "soniox" ? startSoniox() : startOpenAI());
+  autosave = setInterval(save, 3000);
+}
+
+function connected() {
+  startedAt = lastSpeech = Date.now();
+  $("liveLabel").textContent = "Live call";
+  timer = setInterval(tick, 1000);
+  tick();
+}
+
+// Soniox: audio goes up a WebSocket; original and translated words come back as text tokens.
+async function startSoniox() {
+  const token = await api("POST", "/token", { engine: "soniox", lang: callLang });
+  const socket = ws = new WebSocket("wss://stt-rt.soniox.com/transcribe-websocket", ["soniox-api-key", token.api_key]);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error("Could not connect to Soniox."));
+  });
+  socket.send(JSON.stringify({
+    model: "stt-rt-v6",
+    audio_format: "auto",
+    translation: { type: "one_way", target_language: callLang },
+  }));
+  socket.onmessage = ({ data }) => {
+    const msg = JSON.parse(data);
+    if (msg.error_code) {
+      stop();
+      return setStatus(`Soniox error: ${msg.error_message}`, "error");
+    }
+    const tail = { src: "", out: "" };
+    for (const tok of msg.tokens ?? []) {
+      const key = tok.translation_status === "translation" ? "out" : "src";
+      if (tok.is_final) append(key, tok.text); else tail[key] += tok.text;
+    }
+    setPending("src", tail.src);
+    setPending("out", tail.out);
+  };
+  socket.onclose = () => { if (ws === socket) setStatus("Connection lost. End the call and start again.", "error"); };
+
+  recorder = new MediaRecorder(mic, { mimeType: "audio/webm;codecs=opus" });
+  recorder.ondataavailable = (e) => { if (e.data.size && socket.readyState === WebSocket.OPEN) socket.send(e.data); };
+  recorder.start(100); // a chunk every 100 ms
+  connected();
+}
+
+// OpenAI: audio goes over WebRTC; translated text arrives on a data channel, translated voice as a track.
+async function startOpenAI() {
   const token = await api("POST", "/token", { lang: callLang, original: $("showSrc").checked });
 
   pc = new RTCPeerConnection();
@@ -296,10 +381,7 @@ async function start() {
   pc.onconnectionstatechange = () => {
     if (!pc) return;
     if (pc.connectionState === "connected" && !startedAt) {
-      startedAt = lastSpeech = Date.now();
-      $("liveLabel").textContent = "Live call";
-      timer = setInterval(tick, 1000);
-      tick();
+      connected();
     } else if (["failed", "disconnected"].includes(pc.connectionState)) {
       setStatus("Connection lost. End the call and start again.", "error");
     }
@@ -320,7 +402,6 @@ async function start() {
   });
   if (!sdp.ok) throw new Error(`Could not start the call (${sdp.status}): ${await sdp.text()}`);
   await pc.setRemoteDescription({ type: "answer", sdp: await sdp.text() });
-  autosave = setInterval(save, 3000);
 }
 
 function tick() {
@@ -336,11 +417,20 @@ function tick() {
 function stop() {
   clearInterval(timer);
   clearInterval(autosave);
+  if (recorder && recorder.state !== "inactive") recorder.stop();
   mic?.getTracks().forEach((t) => t.stop());
   pc?.close();
-  pc = mic = null;
+  const socket = ws;
+  pc = ws = recorder = mic = null; // cleared before closing so the close is not reported as a lost connection
+  socket?.close();
+  for (const key of ["src", "out"]) { // keep the last unconfirmed words rather than drop them
+    const text = pending[key].textContent;
+    setPending(key, "");
+    if (text) append(key, text);
+  }
+  running = false;
   startedAt = 0;
-  $("showSrc").disabled = $("lang").disabled = false;
+  $("showSrc").disabled = $("lang").disabled = $("engine").disabled = false;
   $("btn").textContent = "Start call";
   $("btn").classList.add("primary");
   $("liveLabel").textContent = "New call";
