@@ -25,3 +25,15 @@ The local server only exists to mint short-lived session tokens, so the API key 
 ## Capturing a call that runs on the Mac
 
 Install [BlackHole](https://github.com/ExistentialAudio/BlackHole) and select it as the system input device, so the call audio is captured directly instead of through the microphone.
+
+## Deploying to a server
+
+The `Jenkinsfile` tests the app, copies it to `/opt/live-translator` on the Jenkins box and restarts it on `127.0.0.1:6303`. Saved calls (`calls.db`) are kept across deployments.
+
+One-time setup:
+
+1. In Jenkins, add two **Secret text** credentials: `live-translator-openai-key` (the OpenAI API key) and `live-translator-password` (the password for opening the page).
+2. Point an HTTPS hostname at `http://localhost:6303`, for example with a Cloudflare Tunnel ingress. The microphone only works over HTTPS.
+3. Set `PUBLIC_HOST` in the `Jenkinsfile` to that hostname.
+
+The page then asks for the password (any username). The app refuses to start with `PUBLIC_HOST` set and no `APP_PASSWORD`. It is not restarted after a reboot: run the Jenkins job again.

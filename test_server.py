@@ -1,4 +1,5 @@
 """Run: python3 test_server.py"""
+import base64
 import json
 import threading
 import urllib.error
@@ -51,4 +52,15 @@ assert j(call("GET", "/calls?q=nothing"))[1] == []
 
 assert call("DELETE", f"/calls/{cid}")[0] == 200
 assert call("GET", f"/calls/{cid}")[0] == 404
+
+# Server mode: public hostname allowed, password required on everything.
+server.PUBLIC_HOST, server.PASSWORD = "translator.example.com", "s3cret"
+basic = lambda pw: {"Authorization": "Basic " + base64.b64encode(f"me:{pw}".encode()).decode()}
+assert call("GET", "/")[0] == 401
+assert call("GET", "/calls", headers=basic("wrong"))[0] == 401
+assert call("GET", "/calls", headers={"Authorization": "Basic !!!"})[0] == 401
+assert call("GET", "/calls", headers=basic("s3cret"))[0] == 200
+assert call("GET", "/calls", headers={**basic("s3cret"), "Host": "translator.example.com",
+                                      "Origin": "https://translator.example.com"})[0] == 200
+assert call("GET", "/calls", headers={**basic("s3cret"), "Host": "evil.example"})[0] == 403
 print("ok")

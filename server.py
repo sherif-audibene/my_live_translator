@@ -4,7 +4,12 @@ Serves the page, mints short-lived OpenAI session tokens (so the API key never
 reaches the browser) and stores call transcripts in a local SQLite file.
 
 Run: OPENAI_API_KEY=sk-... python3 server.py  ->  http://localhost:8765
+
+On a server, also set PUBLIC_HOST (the HTTPS hostname in front of it) and
+APP_PASSWORD (required then); PORT is optional.
 """
+import base64
+import hmac
 import json
 import os
 import re
@@ -16,7 +21,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-PORT = 8765
+PORT = int(os.environ.get("PORT", 8765))
+PUBLIC_HOST = os.environ.get("PUBLIC_HOST")    # e.g. translator.example.com, when behind an HTTPS proxy
+PASSWORD = os.environ.get("APP_PASSWORD")      # if set, every request needs it (HTTP Basic, any username)
 LANGS = {"en", "ar", "de"}
 db = None
 
@@ -59,11 +66,13 @@ def mint_token(lang, with_original):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def reply(self, status, body):
+    def reply(self, status, body, headers=()):
         if not isinstance(body, bytes):
             body = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for name, value in headers:
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -79,12 +88,27 @@ class Handler(BaseHTTPRequestHandler):
         # calling this server (and spending the API key) through the browser.
         port = self.server.server_port
         hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
+        if PUBLIC_HOST:
+            hosts.add(PUBLIC_HOST)
         origin = self.headers.get("Origin")
         return self.headers.get("Host") in hosts and (origin is None or origin.split("//")[-1] in hosts)
+
+    def authorized(self):
+        if not PASSWORD:
+            return True
+        scheme, _, encoded = self.headers.get("Authorization", "").partition(" ")
+        try:
+            given = base64.b64decode(encoded).partition(b":")[2]
+        except ValueError:
+            return False
+        return scheme == "Basic" and hmac.compare_digest(given, PASSWORD.encode())
 
     def route(self):
         if not self.allowed():
             return self.reply(403, {"error": "forbidden"})
+        if not self.authorized():
+            return self.reply(401, {"error": "password required"},
+                              [("WWW-Authenticate", 'Basic realm="Live Translator"')])
         path, _, query = self.path.partition("?")
         method = self.command
         call = re.fullmatch(r"/calls/(\d+)", path)
@@ -152,7 +176,9 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.environ["OPENAI_API_KEY"]  # fail now rather than on the first call
+    if PUBLIC_HOST and not PASSWORD:
+        raise SystemExit("PUBLIC_HOST is set, so APP_PASSWORD is required: without it anyone could use the API key")
     open_db(os.path.join(ROOT, "calls.db"))
     print(f"http://localhost:{PORT}")
-    # localhost only: anyone who can reach this server can spend the API key and read the calls
+    # Binds to localhost only; on a server an HTTPS proxy or tunnel forwards to it.
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
