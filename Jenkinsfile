@@ -10,7 +10,7 @@ pipeline {
 
   environment {
     DEPLOY_DIR = '/opt/live-translator'
-    PUBLIC_HOST = 'translator.sherifs.de'
+    PUBLIC_HOST = 'translate.sherifs.de'
     PORT = '6303'
   }
 
