@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Live Translator</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font: 16px system-ui; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 12px 16px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #333; }
+  button, select { font: inherit; padding: 6px 12px; }
+  #status { color: #999; }
+  main { flex: 1; display: flex; min-height: 0; }
+  main div { flex: 1; overflow-y: auto; padding: 24px; font-size: 32px; line-height: 1.4; white-space: pre-wrap; }
+  #src { color: #999; border-right: 1px solid #333; }
+</style>
+<header>
+  <button id="btn">Start</button>
+  <label>To <select id="lang">
+    <option value="en">English</option><option value="ar">Arabic</option><option value="de">German</option>
+  </select></label>
+  <label><input type="checkbox" id="voice"> Play voice (use headphones)</label>
+  <label><input type="checkbox" id="showSrc"> Show original</label>
+  <span id="status">idle</span>
+</header>
+<main>
+  <div id="src" hidden dir="auto"></div>
+  <div id="out" aria-live="polite" dir="auto"></div>
+</main>
+<audio id="audio" autoplay muted></audio>
+<script>
+const $ = (id) => document.getElementById(id);
+let pc, mic;
+
+$("showSrc").onchange = () => { $("src").hidden = !$("showSrc").checked; };
+
+function append(el, delta) {
+  const now = Date.now();
+  // No "sentence done" event, so a 2s pause starts a new line.
+  if (el.last && now - el.last > 2000) el.textContent += "\n";
+  el.last = now;
+  el.textContent += delta;
+  el.scrollTop = el.scrollHeight;
+}
+
+$("voice").onchange = () => { $("audio").muted = !$("voice").checked; };
+$("btn").onclick = () => (pc ? stop() : start().catch((e) => { stop(); $("status").textContent = e.message; }));
+
+async function start() {
+  $("btn").textContent = "Stop";
+  $("status").textContent = "connecting…";
+  $("showSrc").disabled = true; // transcription is fixed when the session is created
+
+  // Browser audio processing off: it adds delay and mangles speakerphone audio.
+  mic = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  });
+
+  const tokenRes = await fetch($("showSrc").checked ? "/token?src=1" : "/token", { method: "POST", body: $("lang").value });
+  const token = await tokenRes.json();
+  if (!tokenRes.ok) throw new Error(token.error?.message || "token request failed");
+  const secret = token.value ?? token.client_secret?.value; // docs disagree on the shape
+
+  pc = new RTCPeerConnection();
+  pc.addTrack(mic.getTracks()[0], mic);
+  pc.ontrack = ({ streams }) => { $("audio").srcObject = streams[0]; };
+  pc.onconnectionstatechange = () => { if (pc) $("status").textContent = pc.connectionState; };
+
+  pc.createDataChannel("oai-events").onmessage = ({ data }) => {
+    const ev = JSON.parse(data);
+    if (ev.type === "session.output_transcript.delta") append($("out"), ev.delta);
+    else if (ev.type === "session.input_transcript.delta") append($("src"), ev.delta);
+    else if (ev.type === "error") {
+      $("status").textContent = ev.error?.message || "error";
+    }
+  };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  const sdp = await fetch("https://api.openai.com/v1/realtime/translations/calls", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/sdp" },
+    body: pc.localDescription.sdp,
+  });
+  if (!sdp.ok) throw new Error(`call failed: ${sdp.status} ${await sdp.text()}`);
+  await pc.setRemoteDescription({ type: "answer", sdp: await sdp.text() });
+}
+
+function stop() {
+  mic?.getTracks().forEach((t) => t.stop());
+  pc?.close();
+  pc = mic = null;
+  $("showSrc").disabled = false;
+  $("btn").textContent = "Start";
+  $("status").textContent = "idle";
+}
+</script>
