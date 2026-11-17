@@ -66,11 +66,11 @@ def mint_token(lang, with_original):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def reply(self, status, body, headers=()):
+    def reply(self, status, body, headers=(), ctype="application/json"):
         if not isinstance(body, bytes):
             body = json.dumps(body).encode()
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", ctype)
         for name, value in headers:
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
@@ -107,8 +107,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed():
             return self.reply(403, {"error": "forbidden"})
         if not self.authorized():
-            return self.reply(401, {"error": "password required"},
-                              [("WWW-Authenticate", 'Basic realm="Live Translator"')])
+            # Plain text, not JSON: the browser keeps the type of this first answer for the
+            # page it loads after the password prompt, and JSON viewers then mangle the page.
+            return self.reply(401, b"Password required",
+                              [("WWW-Authenticate", 'Basic realm="Live Translator"')], "text/plain")
         path, _, query = self.path.partition("?")
         method = self.command
         call = re.fullmatch(r"/calls/(\d+)", path)
