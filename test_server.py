@@ -8,6 +8,7 @@ from http.server import HTTPServer
 
 import server
 
+server.PUBLIC_HOST = server.PASSWORD = None  # start in local mode whatever the environment says
 server.open_db(":memory:")
 httpd = HTTPServer(("127.0.0.1", 0), server.Handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
