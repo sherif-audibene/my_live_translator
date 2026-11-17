@@ -33,7 +33,7 @@
           background: none; cursor: pointer; }
   .item:hover { background: var(--hover); }
   .item[aria-current="true"] { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
-  .item b { display: block; font-weight: 600; }
+  .item b { display: block; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .item small { display: block; color: var(--muted); font-size: 12px; }
   .item p { margin: 3px 0 0; color: var(--muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #liveItem { width: auto; margin: 0 8px 6px; }
@@ -61,7 +61,9 @@
   #status.error { color: var(--live); }
   @keyframes pulse { 50% { opacity: 0.3; } }
   @media (prefers-reduced-motion: reduce) { #status.live::before { animation: none; } }
-  #viewTitle { font-weight: 600; }
+  #viewName { flex: 1; min-width: 120px; max-width: 420px; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px;
+              background: none; font-weight: 600; }
+  #viewName:hover, #viewName:focus { border-color: var(--line); }
   #viewMeta { color: var(--muted); margin-inline-end: auto; }
 
   main { flex: 1; min-height: 0; display: flex; }
@@ -73,6 +75,7 @@
           font-family: var(--reader-font); font-size: var(--reader-size); line-height: 1.45; }
   #src { color: var(--muted); }
   .pending { opacity: 0.55; } /* words the engine may still revise */
+  .hit { background: color-mix(in srgb, var(--accent) 24%, transparent); border-radius: 3px; } /* matches the selection on the other side */
   .text:empty::before { content: attr(data-empty); color: var(--muted); font: 15px/1.5 system-ui, sans-serif; }
 
   @media (max-width: 760px) {
@@ -113,8 +116,8 @@
     </label>
     <label>Engine
       <select id="engine">
+        <option value="soniox">Soniox, about $0.20 per hour, text only</option>
         <option value="openai">OpenAI, about $2 per hour</option>
-        <option value="soniox">Soniox, about $0.15 per hour, text only</option>
       </select>
     </label>
     <label><input type="checkbox" id="showSrc"> Show original</label>
@@ -123,7 +126,7 @@
   </div>
   <div class="bar" id="viewBar" hidden>
     <button id="back" class="btn">Back to live</button>
-    <span id="viewTitle"></span>
+    <input id="viewName" aria-label="Call name" title="Type a name for this call" maxlength="200">
     <span id="viewMeta"></span>
     <button id="del" class="btn danger">Delete call</button>
   </div>
@@ -144,7 +147,7 @@
 const $ = (id) => document.getElementById(id);
 const LANG = { en: "English", ar: "Arabic", de: "German" };
 
-const live = { src: "", out: "", last: {} }; // text of the current call
+const live = { src: "", out: "", last: {}, marks: [] }; // text of the current call; marks = where each phrase ends on both sides
 let pc, ws, recorder, mic, timer, autosave, running = false;
 let callId = null, callLang = null, startedAt = 0, dirty = false, saving = Promise.resolve();
 const SILENCE_LIMIT_MS = 2 * 60 * 1000; // end the call after this long with no speech, so a forgotten session stops billing
@@ -169,6 +172,8 @@ function setStatus(text, cls = "") {
 
 const clock = (sec) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 const when = (iso) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+// Until the user names a call it goes by its first words. ponytail: first 8 words, no sentence detection ("Dr." would fool it)
+const autoName = (text) => text.trim().split(/\s+/).slice(0, 8).join(" ");
 const duration = (c) => clock((new Date(c.ended_at) - new Date(c.started_at)) / 1000);
 
 /* ---------- Transcript panes ---------- */
@@ -177,8 +182,8 @@ function render() {
   const showSrc = view ? !!view.original : $("showSrc").checked;
   $("srcPane").hidden = !showSrc;
   $("panes").classList.toggle("single", !showSrc);
-  $("src").textContent = view ? view.original : live.src;
-  $("out").textContent = view ? view.translation : live.out;
+  fill("src", view ? view.original : live.src, 0);
+  fill("out", view ? view.translation : live.out, 1);
   for (const id of ["src", "out"]) {
     if (!view && pending[id].textContent) $(id).append(pending[id]);
     $(id).scrollTop = view ? 0 : $(id).scrollHeight;
@@ -187,13 +192,40 @@ function render() {
   $("liveBar").hidden = !!view;
   $("viewBar").hidden = !view;
   if (view) {
-    $("viewTitle").textContent = when(view.started_at);
-    $("viewMeta").textContent = `${duration(view)}, translated to ${LANG[view.lang] ?? view.lang}`;
+    $("viewName").value = view.title;
+    $("viewName").placeholder = autoName(view.translation) || "Name this call";
+    $("viewMeta").textContent = `${when(view.started_at)}, ${duration(view)}, translated to ${LANG[view.lang] ?? view.lang}`;
     resetDelete();
   }
   $("liveItem").setAttribute("aria-current", !view);
   for (const el of $("list").children) el.setAttribute("aria-current", view?.id === Number(el.dataset.id));
 }
+
+// A saved call with phrase marks gets one span per phrase, in the same order on both sides,
+// so selecting text on one side can highlight the matching phrases on the other.
+function fill(id, text, side) {
+  if (!view?.marks?.length) return void ($(id).textContent = text);
+  let at = 0;
+  $(id).replaceChildren(...[...view.marks.map((m) => m[side]), text.length].map((end) => {
+    const span = document.createElement("span");
+    span.textContent = text.slice(at, end);
+    at = end;
+    return span;
+  }));
+}
+
+document.addEventListener("selectionchange", () => {
+  document.querySelectorAll(".hit").forEach((el) => el.classList.remove("hit"));
+  const sel = getSelection();
+  if (!view?.marks?.length || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const from = ["src", "out"].find((id) => $(id).contains(range.startContainer));
+  if (!from) return;
+  const twins = $(from === "src" ? "out" : "src").children;
+  const hits = [...$(from).children].flatMap((span, i) => (range.intersectsNode(span) && twins[i] ? [twins[i]] : []));
+  hits.forEach((el) => el.classList.add("hit"));
+  hits[0]?.scrollIntoView({ block: "nearest" });
+});
 
 function append(key, delta) {
   const now = Date.now();
@@ -231,7 +263,7 @@ function save() {
   saving = saving
     .then(async () => {
       if (callId == null) callId = (await api("POST", "/calls", { lang: callLang })).id;
-      await api("PUT", `/calls/${callId}`, { original: live.src, translation: live.out });
+      await api("PUT", `/calls/${callId}`, { original: live.src, translation: live.out, marks: live.marks });
       await loadCalls();
     })
     .catch((e) => { dirty = true; setStatus(`Could not save the call: ${e.message}`, "error"); });
@@ -247,9 +279,11 @@ async function loadCalls() {
     item.dataset.id = c.id;
     item.setAttribute("aria-current", view?.id === c.id);
     const title = document.createElement("b"), meta = document.createElement("small"), preview = document.createElement("p");
-    title.textContent = when(c.started_at);
-    meta.textContent = `${duration(c)}, ${LANG[c.lang] ?? c.lang}`;
+    title.textContent = c.title || autoName(c.preview) || "Empty call";
+    title.dir = "auto";
+    meta.textContent = `${when(c.started_at)}, ${duration(c)}, ${LANG[c.lang] ?? c.lang}`;
     preview.textContent = c.preview;
+    preview.hidden = !c.title; // an unnamed call already shows its first words as the name
     preview.dir = "auto";
     item.append(title, meta, preview);
     item.onclick = async () => { view = await api("GET", `/calls/${c.id}`); render(); };
@@ -283,6 +317,11 @@ $("del").onclick = async () => {
   render();
   loadCalls();
 };
+$("viewName").onchange = async () => {
+  view.title = $("viewName").value.trim();
+  await api("PUT", `/calls/${view.id}`, { title: view.title });
+  loadCalls();
+};
 $("back").onclick = $("liveItem").onclick = () => { view = null; render(); };
 
 let searchDelay;
@@ -299,7 +338,7 @@ function applyEngine() {
   $("voice").disabled = soniox; // Soniox returns text only
   try { localStorage.setItem("engine", $("engine").value); } catch {}
 }
-try { $("engine").value = localStorage.getItem("engine") || "openai"; } catch {}
+try { $("engine").value = localStorage.getItem("engine") || "soniox"; } catch {}
 if ($("engine").selectedIndex < 0) $("engine").selectedIndex = 0;
 $("engine").onchange = applyEngine;
 applyEngine();
@@ -314,7 +353,7 @@ async function start() {
   setStatus("Connecting…");
 
   await saving; // let the previous call finish saving before reusing the state
-  Object.assign(live, { src: "", out: "", last: {} });
+  Object.assign(live, { src: "", out: "", last: {}, marks: [] });
   callId = null;
   callLang = $("lang").value;
   dirty = false;
@@ -349,6 +388,7 @@ async function startSoniox() {
     audio_format: "auto",
     translation: { type: "one_way", target_language: callLang },
   }));
+  let lastKey;
   socket.onmessage = ({ data }) => {
     const msg = JSON.parse(data);
     if (msg.error_code) {
@@ -358,7 +398,12 @@ async function startSoniox() {
     const tail = { src: "", out: "" };
     for (const tok of msg.tokens ?? []) {
       const key = tok.translation_status === "translation" ? "out" : "src";
-      if (tok.is_final) append(key, tok.text); else tail[key] += tok.text;
+      if (!tok.is_final) { tail[key] += tok.text; continue; }
+      // Soniox confirms a phrase of the original, then its translation. Original text arriving
+      // after a translation therefore starts the next phrase: note where the previous one ended.
+      if (key === "src" && lastKey === "out") live.marks.push([live.src.length, live.out.length]);
+      lastKey = key;
+      append(key, tok.text);
     }
     setPending("src", tail.src);
     setPending("out", tail.out);

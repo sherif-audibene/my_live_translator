@@ -5,12 +5,14 @@ Live subtitles for a phone call (or anything the Mac's microphone hears), transl
 Two engines, switchable in the page:
 
 - **OpenAI** `gpt-realtime-translate` over WebRTC: about $2 per hour, text plus optional translated voice.
-- **Soniox** real-time translation over a WebSocket: about $0.15 per hour, text only, original transcript included.
+- **Soniox** real-time translation over a WebSocket: about $0.20 per hour, text only, original transcript included. The default.
 
 - Target languages: English, Arabic, German (source language is auto-detected)
 - Optional side-by-side original transcript
 - Optional translated voice playback (use headphones)
 - Every call is saved automatically to a local SQLite file (`calls.db`) and can be searched, reread and deleted from the sidebar
+- Saved calls can be named; until then they go by their first words
+- In a saved Soniox call, selecting text on one side highlights the matching phrases on the other
 - Adjustable transcript font and size
 
 ## Run

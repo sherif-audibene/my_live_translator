@@ -42,6 +42,14 @@ def open_db(path):
             original TEXT NOT NULL DEFAULT '',
             translation TEXT NOT NULL DEFAULT '')"""
     )
+    for column in (
+        "marks TEXT NOT NULL DEFAULT '[]'",  # where each phrase ends in both texts: [[original_end, translation_end], ...]
+        "title TEXT NOT NULL DEFAULT ''",    # name typed by the user; empty = the page shows the first words instead
+    ):  # columns added after the first release
+        try:
+            db.execute(f"ALTER TABLE calls ADD COLUMN {column}")
+        except sqlite3.OperationalError:
+            pass  # already there
     db.commit()
 
 
@@ -148,9 +156,9 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/calls":
                 q = f"%{parse_qs(query).get('q', [''])[0]}%"
                 rows = db.execute(
-                    """SELECT id, started_at, ended_at, lang, substr(translation, 1, 140) AS preview
-                       FROM calls WHERE translation LIKE ? OR original LIKE ? ORDER BY id DESC""",
-                    (q, q),
+                    """SELECT id, started_at, ended_at, lang, title, substr(translation, 1, 140) AS preview
+                       FROM calls WHERE translation LIKE ? OR original LIKE ? OR title LIKE ? ORDER BY id DESC""",
+                    (q, q, q),
                 ).fetchall()
                 return self.reply(200, [dict(r) for r in rows])
 
@@ -167,15 +175,27 @@ class Handler(BaseHTTPRequestHandler):
                 call_id = int(call.group(1))
                 if method == "GET":
                     row = db.execute("SELECT * FROM calls WHERE id = ?", (call_id,)).fetchone()
-                    return self.reply(200, dict(row)) if row else self.reply(404, {"error": "call not found"})
+                    if not row:
+                        return self.reply(404, {"error": "call not found"})
+                    return self.reply(200, {**dict(row), "marks": json.loads(row["marks"])})
                 if method == "PUT":
                     data = self.json_body()
+                    if "title" in data:  # rename only; the transcript is left alone
+                        if not isinstance(data["title"], str):
+                            return self.reply(400, {"error": "title must be text"})
+                        cur = db.execute("UPDATE calls SET title = ? WHERE id = ?", (data["title"].strip()[:200], call_id))
+                        db.commit()
+                        return self.reply(200, {"ok": True}) if cur.rowcount else self.reply(404, {"error": "call not found"})
                     original, translation = data.get("original", ""), data.get("translation", "")
+                    marks = data.get("marks", [])
                     if not isinstance(original, str) or not isinstance(translation, str):
                         return self.reply(400, {"error": "original and translation must be text"})
+                    if not (isinstance(marks, list) and all(
+                            isinstance(m, list) and len(m) == 2 and all(type(n) is int for n in m) for m in marks)):
+                        return self.reply(400, {"error": "marks must be a list of number pairs"})
                     cur = db.execute(
-                        "UPDATE calls SET original = ?, translation = ?, ended_at = ? WHERE id = ?",
-                        (original, translation, now(), call_id),
+                        "UPDATE calls SET original = ?, translation = ?, marks = ?, ended_at = ? WHERE id = ?",
+                        (original, translation, json.dumps(marks), now(), call_id),
                     )
                     db.commit()
                     return self.reply(200, {"ok": True}) if cur.rowcount else self.reply(404, {"error": "call not found"})

@@ -45,6 +45,15 @@ assert status == 201
 cid = created["id"]
 assert call("PUT", f"/calls/{cid}", {"original": "مرحبا", "translation": "Hallo Welt"})[0] == 200
 assert call("PUT", f"/calls/{cid}", {"translation": 5})[0] == 400
+assert call("PUT", f"/calls/{cid}", {"marks": ["x"]})[0] == 400
+assert j(call("GET", f"/calls/{cid}"))[1]["marks"] == []
+assert call("PUT", f"/calls/{cid}", {"original": "مرحبا", "translation": "Hallo Welt", "marks": [[3, 5]]})[0] == 200
+assert j(call("GET", f"/calls/{cid}"))[1]["marks"] == [[3, 5]]
+assert call("PUT", f"/calls/{cid}", {"title": 5})[0] == 400
+assert call("PUT", f"/calls/{cid}", {"title": " Zahnarzt "})[0] == 200
+renamed = j(call("GET", f"/calls/{cid}"))[1]
+assert (renamed["title"], renamed["translation"]) == ("Zahnarzt", "Hallo Welt"), "renaming keeps the transcript"
+assert [c["title"] for c in j(call("GET", "/calls?q=Zahn"))[1]] == ["Zahnarzt"], "search covers the name"
 assert call("PUT", "/calls/999", {"translation": "x"})[0] == 404
 
 status, saved = j(call("GET", f"/calls/{cid}"))
